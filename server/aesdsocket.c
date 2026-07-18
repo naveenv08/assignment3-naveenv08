@@ -12,12 +12,40 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <pthread.h>
+#include <stdbool.h>
+#include <sys/queue.h>
+
+#include <time.h>
+#include <errno.h>
+
 #define DATAFILE "/var/tmp/aesdsocketdata"
 
 volatile sig_atomic_t exit_requested = 0;
 
 int listenfd = -1;
 
+struct thread_data
+{
+    pthread_t thread_id;
+    int clientfd;
+    struct sockaddr_in client_addr;
+    bool thread_complete;
+
+    SLIST_ENTRY(thread_data) entries;
+};
+
+SLIST_HEAD(thread_list, thread_data);
+
+struct thread_list thread_head;
+
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+timer_t timerid;
+
+void *client_thread(void *arg);
+
+void timer_thread(union sigval sigval);
 
 void signal_handler(int signo)
 {
@@ -199,6 +227,68 @@ int send_file_contents(int connfd)
 }
 
 
+void *client_thread(void *arg)
+{
+    struct thread_data *thread_param = (struct thread_data *)arg;
+
+    size_t packet_size;
+
+    char *packet = receive_packet(thread_param->clientfd, &packet_size);
+
+	if(packet != NULL)
+	{
+    	pthread_mutex_lock(&file_mutex);
+
+    	append_to_file(packet, packet_size);
+
+    	send_file_contents(thread_param->clientfd);
+
+    	pthread_mutex_unlock(&file_mutex);
+
+    	free(packet);
+	}
+
+    syslog(LOG_DEBUG, "Closed connection from %s",
+           inet_ntoa(thread_param->client_addr.sin_addr));
+
+    close(thread_param->clientfd);
+
+    thread_param->thread_complete = true;
+
+    return NULL;
+}
+
+
+void timer_thread(union sigval sigval)
+{
+    (void)sigval;
+
+    time_t current_time = time(NULL);
+
+    struct tm *time_info = localtime(&current_time);
+
+    if(time_info == NULL)
+    {
+        return;
+    }
+
+    char timestamp[128];
+
+    if(strftime(timestamp,
+                sizeof(timestamp),
+                "timestamp:%a, %d %b %Y %H:%M:%S %z\n",
+                time_info) == 0)
+    {
+        return;
+    }
+
+    pthread_mutex_lock(&file_mutex);
+
+    append_to_file(timestamp, strlen(timestamp));
+
+    pthread_mutex_unlock(&file_mutex);
+}
+
 
 void cleanup(void)
 {
@@ -258,6 +348,10 @@ int main(int argc, char *argv[])
     	daemonize();
 
     openlog(NULL, 0, LOG_USER);
+
+    SLIST_INIT(&thread_head);
+
+    remove(DATAFILE);
     
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -268,8 +362,50 @@ int main(int argc, char *argv[])
     if(listenfd == -1)
         return -1;
 
+
+struct sigevent sev;
+struct itimerspec its;
+
+memset(&sev, 0, sizeof(sev));
+
+sev.sigev_notify = SIGEV_THREAD;
+sev.sigev_notify_function = timer_thread;
+
+if (timer_create(CLOCK_REALTIME, &sev, &timerid) == -1)
+{
+    perror("timer_create");
+
+    close(listenfd);
+
+    closelog();
+
+    return -1;
+}
+
+its.it_value.tv_sec = 10;
+its.it_value.tv_nsec = 0;
+
+its.it_interval.tv_sec = 10;
+its.it_interval.tv_nsec = 0;
+
+if (timer_settime(timerid, 0, &its, NULL) == -1)
+{
+    perror("timer_settime");
+
+    timer_delete(timerid);
+
+    close(listenfd);
+
+    closelog();
+
+    return -1;
+}
+
+
     while(!exit_requested)
     {
+	struct thread_data *thread_param;
+
         struct sockaddr_in client_addr;
 
         int connfd = accept_client(listenfd, &client_addr);
@@ -286,29 +422,75 @@ int main(int argc, char *argv[])
         
         syslog(LOG_DEBUG, "Accepted connection from %s", inet_ntoa(client_addr.sin_addr) );
 
-        size_t packet_size;
 
-        char *packet = receive_packet(connfd, &packet_size);
+	thread_param = malloc(sizeof(struct thread_data));
 
-        if(packet != NULL)
-        {
-            append_to_file(packet, packet_size);
+	if(thread_param == NULL)
+	{
+    	close(connfd);
+    	continue;
+	}
 
-            send_file_contents(connfd);
+	thread_param->clientfd = connfd;
+	thread_param->client_addr = client_addr;
+	thread_param->thread_complete = false;
 
-            free(packet);
-        }
+	SLIST_INSERT_HEAD(&thread_head, thread_param, entries);
+	
+	if(pthread_create(&thread_param->thread_id, NULL, client_thread, thread_param) != 0)
+	{
+    	syslog(LOG_ERR, "pthread_create failed");
+
+    	SLIST_REMOVE(&thread_head, thread_param, thread_data, entries);
+
+    	close(connfd);
+    	free(thread_param);
+    	continue;
+	}
 
 	
-	syslog(LOG_DEBUG, "Closed connection from %s", inet_ntoa(client_addr.sin_addr) );
+	struct thread_data *curr = SLIST_FIRST(&thread_head);
 
-        close(connfd);
+	while (curr != NULL)
+	{
+    		struct thread_data *next = SLIST_NEXT(curr, entries);
+
+    		if (curr->thread_complete)
+    		{
+        		pthread_join(curr->thread_id, NULL);
+
+        		SLIST_REMOVE(&thread_head, curr, thread_data, entries);
+
+        		free(curr);
+    		}
+	
+    		curr = next;
+	}
+	
+
     }
 
-    syslog(LOG_DEBUG, "Caught signal, exiting");
-    cleanup();
-    
-    closelog();
+
+	while (!SLIST_EMPTY(&thread_head))
+	{
+    	struct thread_data *thread = SLIST_FIRST(&thread_head);
+
+    	pthread_join(thread->thread_id, NULL);
+
+    	SLIST_REMOVE_HEAD(&thread_head, entries);
+
+    	free(thread);
+	}
+
+	syslog(LOG_DEBUG, "Caught signal, exiting");
+
+	timer_delete(timerid);
+
+	cleanup();
+
+	pthread_mutex_destroy(&file_mutex);
+
+	closelog();
 
     return 0;
 }
