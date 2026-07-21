@@ -362,6 +362,7 @@ int main(int argc, char *argv[])
     if(listenfd == -1)
         return -1;
 
+#if 0
 
 struct sigevent sev;
 struct itimerspec its;
@@ -401,6 +402,7 @@ if (timer_settime(timerid, 0, &its, NULL) == -1)
     return -1;
 }
 
+#endif
 
     while(!exit_requested)
     {
@@ -484,7 +486,7 @@ if (timer_settime(timerid, 0, &its, NULL) == -1)
 
 	syslog(LOG_DEBUG, "Caught signal, exiting");
 
-	timer_delete(timerid);
+	//timer_delete(timerid);
 
 	cleanup();
 
