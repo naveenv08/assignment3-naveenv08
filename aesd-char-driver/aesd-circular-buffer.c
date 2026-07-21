@@ -73,14 +73,6 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     * TODO: implement per description
     */
 
-	printk(KERN_INFO
-       "ADD: in=%u out=%u full=%d size=%zu data=%s",
-       buffer->in_offs,
-       buffer->out_offs,
-       buffer->full,
-       add_entry->size,
-       add_entry->buffptr);
-
     /* Store the new entry */
     buffer->entry[buffer->in_offs] = *add_entry;
 
