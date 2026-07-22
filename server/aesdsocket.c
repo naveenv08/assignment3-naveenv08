@@ -248,13 +248,26 @@ void *client_thread(void *arg)
     	struct aesd_seekto seekto;
     	bool ioctl_cmd = false;
 
-    	if (packet != NULL)
-    	{
-        	if (sscanf(packet, "AESDCHAR_IOCSEEKTO:%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2)
-        	{
-            		ioctl_cmd = true;
-        	}
-    	}
+if (packet != NULL)
+{
+    printf("Received packet: [%s]\n", packet);
+
+    int ret = sscanf(packet,
+                     "AESDCHAR_IOCSEEKTO:%u,%u",
+                     &seekto.write_cmd,
+                     &seekto.write_cmd_offset);
+
+    printf("sscanf returned %d, cmd=%u, offset=%u\n",
+           ret,
+           seekto.write_cmd,
+           seekto.write_cmd_offset);
+
+    if (ret == 2)
+    {
+        ioctl_cmd = true;
+    }
+}
+
 	#endif
 
 	if(packet != NULL)
@@ -266,23 +279,32 @@ void *client_thread(void *arg)
 
 		if (ioctl_cmd)
 		{
+    			printf("Executing ioctl\n");
+
     			int fd = open(DATAFILE, O_RDWR);
 
     			if (fd >= 0)
     			{
-        			ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+        			int rc = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+
+        			printf("ioctl returned %d, errno=%d\n", rc, errno);
+
         			close(fd);
     			}
-			}
-			else
-			{
-    				append_to_file(packet, packet_size);
-			}
+    			else
+    			{
+        			printf("Failed to open %s\n", DATAFILE);
+    			}
+		}
+		else
+		{
+    			append_to_file(packet, packet_size);
+		}
 
 		#else
 
 		append_to_file(packet, packet_size);
-	
+
 		#endif
 
 		send_file_contents(thread_param->clientfd);
