@@ -19,7 +19,16 @@
 #include <time.h>
 #include <errno.h>
 
+#ifdef USE_AESD_CHAR_DEVICE
+#include <sys/ioctl.h>
+#include "../aesd-char-driver/aesd_ioctl.h"
+#endif
+
+#ifdef USE_AESD_CHAR_DEVICE
+#define DATAFILE "/dev/aesdchar"
+#else
 #define DATAFILE "/var/tmp/aesdsocketdata"
+#endif
 
 volatile sig_atomic_t exit_requested = 0;
 
@@ -235,17 +244,52 @@ void *client_thread(void *arg)
 
     char *packet = receive_packet(thread_param->clientfd, &packet_size);
 
+	#ifdef USE_AESD_CHAR_DEVICE
+    	struct aesd_seekto seekto;
+    	bool ioctl_cmd = false;
+
+    	if (packet != NULL)
+    	{
+        	if (sscanf(packet, "AESDCHAR_IOCSEEKTO:%u,%u", &seekto.write_cmd, &seekto.write_cmd_offset) == 2)
+        	{
+            		ioctl_cmd = true;
+        	}
+    	}
+	#endif
+
 	if(packet != NULL)
 	{
-    	pthread_mutex_lock(&file_mutex);
+    	
+		pthread_mutex_lock(&file_mutex);
 
-    	append_to_file(packet, packet_size);
+		#ifdef USE_AESD_CHAR_DEVICE
 
-    	send_file_contents(thread_param->clientfd);
+		if (ioctl_cmd)
+		{
+    			int fd = open(DATAFILE, O_RDWR);
 
-    	pthread_mutex_unlock(&file_mutex);
+    			if (fd >= 0)
+    			{
+        			ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+        			close(fd);
+    			}
+			}
+			else
+			{
+    				append_to_file(packet, packet_size);
+			}
 
-    	free(packet);
+		#else
+
+		append_to_file(packet, packet_size);
+	
+		#endif
+
+		send_file_contents(thread_param->clientfd);
+
+		pthread_mutex_unlock(&file_mutex);
+
+    		free(packet);
 	}
 
     syslog(LOG_DEBUG, "Closed connection from %s",
@@ -292,13 +336,9 @@ void timer_thread(union sigval sigval)
 
 void cleanup(void)
 {
-    //if(listenfd != -1)
-    //{
-    //    close(listenfd);
-    //   listenfd = -1;
-    //}
-
+    #ifndef USE_AESD_CHAR_DEVICE
     remove(DATAFILE);
+    #endif
 }
 
 
@@ -351,8 +391,9 @@ int main(int argc, char *argv[])
 
     SLIST_INIT(&thread_head);
 
+    #ifndef USE_AESD_CHAR_DEVICE
     remove(DATAFILE);
-    
+    #endif    
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     signal(SIGPIPE, SIG_IGN);
