@@ -200,41 +200,27 @@ int append_to_file(const char *data, size_t size)
 }
 
 
-
-int send_file_contents(int connfd)
+int send_file_contents(int fd, int connfd)
 {
-    int fd;
-
     char buffer[1024];
-
-    fd = open(DATAFILE, O_RDONLY);
-
-    if(fd == -1)
-    {
-        perror("open");
-        return -1;
-    }
 
     ssize_t bytes_read;
 
-    while((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
+    while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0)
     {
-    	ssize_t byte_sent;
-    	
-        byte_sent = send(connfd, buffer, bytes_read, 0);
-        
-        if(byte_sent == -1)
+        ssize_t bytes_sent;
+
+        bytes_sent = send(connfd, buffer, bytes_read, 0);
+
+        if (bytes_sent == -1)
         {
             perror("send");
             return -1;
         }
     }
 
-    close(fd);
-
     return 0;
 }
-
 
 void *client_thread(void *arg)
 {
@@ -270,6 +256,8 @@ if (packet != NULL)
 
 	#endif
 
+	int fd;
+
 	if(packet != NULL)
 	{
     	
@@ -279,35 +267,44 @@ if (packet != NULL)
 
 		if (ioctl_cmd)
 		{
-    			printf("Executing ioctl\n");
-
-    			int fd = open(DATAFILE, O_RDWR);
+    			fd = open(DATAFILE, O_RDWR);
 
     			if (fd >= 0)
     			{
-        			int rc = ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
+        			ioctl(fd, AESDCHAR_IOCSEEKTO, &seekto);
 
-        			printf("ioctl returned %d, errno=%d\n", rc, errno);
+        			send_file_contents(fd, thread_param->clientfd);
 
         			close(fd);
-    			}
-    			else
-    			{
-        			printf("Failed to open %s\n", DATAFILE);
     			}
 		}
 		else
 		{
     			append_to_file(packet, packet_size);
+
+    			fd = open(DATAFILE, O_RDONLY);
+
+    			if (fd >= 0)
+    			{
+        			send_file_contents(fd, thread_param->clientfd);
+
+        			close(fd);
+    			}
 		}
 
 		#else
 
 		append_to_file(packet, packet_size);
 
-		#endif
+    		fd = open(DATAFILE, O_RDONLY);
 
-		send_file_contents(thread_param->clientfd);
+    		if (fd >= 0)
+    		{
+        		send_file_contents(fd, thread_param->clientfd);
+        		close(fd);
+    		}
+
+		#endif
 
 		pthread_mutex_unlock(&file_mutex);
 
