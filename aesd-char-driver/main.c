@@ -104,7 +104,7 @@ static loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 }
 
 
-long aesd_ioctl(struct file *filp , unsigned int cmd , unsigned long arg)
+static long aesd_unlocked_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {	
 	struct aesd_dev *dev = filp->private_data;
 	struct aesd_seekto seekto;
@@ -156,8 +156,7 @@ long aesd_ioctl(struct file *filp , unsigned int cmd , unsigned long arg)
 	return 0;
 }
 
-ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
     ssize_t retval = 0;
 
@@ -205,8 +204,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     return retval;
 }
 
-ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
 
